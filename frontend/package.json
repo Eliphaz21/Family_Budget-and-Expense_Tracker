@@ -1,0 +1,10 @@
+{
+  "name": "family-budget-and-expense-tracker-frontend",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "npm --prefix .. run dev",
+    "build": "npm --prefix .. run build",
+    "preview": "npm --prefix .. run start"
+  }
+}
