@@ -1,0 +1,6 @@
+{
+  "name": "Family Budget and Expense Tracker",
+  "description": "A collaborative portal for family expense tracking, budget management, calendar logging, and spending alerts tailored in Birr.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

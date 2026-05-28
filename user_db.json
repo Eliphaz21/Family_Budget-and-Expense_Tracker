@@ -1,0 +1,26 @@
+[
+  {
+    "uid": "sister_sys",
+    "email": "sister@family.com",
+    "displayName": "Alem (Sister & Administrator)",
+    "role": "sister",
+    "passwordHash": "$2b$10$nTFehRjABryXLEDHuWnB8.II/cRIRTEGr9JbbfCuG33TFgp4tmShi",
+    "createdAt": "2026-05-28T15:17:30.759Z"
+  },
+  {
+    "uid": "father_sys",
+    "email": "father@family.com",
+    "displayName": "Abebe (Father & Provider)",
+    "role": "user",
+    "passwordHash": "$2b$10$9bSA/pfc5l4w3cpKUmQRF.C0wBLtA/qYUGJbEdktQpHRQaxge5S4i",
+    "createdAt": "2026-05-28T15:17:30.862Z"
+  },
+  {
+    "uid": "son_sys",
+    "email": "brother@family.com",
+    "displayName": "Yeabsra (Brother / Software)",
+    "role": "user",
+    "passwordHash": "$2b$10$MAzgtVzgY5VaUHDz/QS5u.2NiMAVkTrpC92MBoQjo4rqa/NQ.u/q.",
+    "createdAt": "2026-05-28T15:17:30.961Z"
+  }
+]
