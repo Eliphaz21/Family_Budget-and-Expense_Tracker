@@ -1,0 +1,1 @@
+export { authenticateRequest } from '../backend/middleware/auth.middleware';

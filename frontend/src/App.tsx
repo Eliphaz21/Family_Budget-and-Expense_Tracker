@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { FamilyUser, Expense, Allowance, Comment, Notification, Funding } from './types';
-import { FamilyLocalStorage } from './db';
+import { apiRequest, clearAuthToken, getStoredAuthToken, storeAuthToken } from './api';
 import AuthScreen from './components/AuthScreen';
 import CalendarView from './components/CalendarView';
 import SpendingCharts from './components/SpendingCharts';
@@ -168,9 +168,30 @@ export default function App() {
   const [allowAmount, setAllowAmount] = useState('');
   const [allowNotes, setAllowNotes] = useState('');
 
+  const loadRemoteState = async (token: string) => {
+    const [authMe, users, expensesData, allowancesData, commentsData, notificationsData, fundingsData] = await Promise.all([
+      apiRequest<{ user: FamilyUser }>('/api/auth/me', { method: 'GET', token }),
+      apiRequest<FamilyUser[]>('/api/users', { method: 'GET', token }),
+      apiRequest<Expense[]>('/api/expenses', { method: 'GET', token }),
+      apiRequest<Allowance[]>('/api/allowances', { method: 'GET', token }),
+      apiRequest<Comment[]>('/api/comments', { method: 'GET', token }),
+      apiRequest<Notification[]>('/api/notifications', { method: 'GET', token }),
+      apiRequest<Funding[]>('/api/fundings', { method: 'GET', token }),
+    ]);
+
+    setCurrentUser(authMe.user);
+    setAuthToken(token);
+    setAllUsers(users);
+    setExpenses(expensesData);
+    setAllowances(allowancesData);
+    setComments(commentsData);
+    setNotifications(notificationsData);
+    setFundings(fundingsData);
+  };
+
   // 1. Core Boot Check: JWT auth check against Express server
   useEffect(() => {
-    const savedToken = localStorage.getItem('auth_token');
+    const savedToken = getStoredAuthToken();
     if (!savedToken) {
       setIsAuthLoading(false);
       return;
@@ -178,23 +199,10 @@ export default function App() {
 
     const verifyToken = async () => {
       try {
-        const response = await fetch('/api/auth/me', {
-          method: 'GET',
-          headers: {
-            'Authorization': `Bearer ${savedToken}`
-          }
-        });
-
-        if (response.ok) {
-          const data = await response.json();
-          setCurrentUser(data.user);
-          setAuthToken(savedToken);
-        } else {
-          // Bad or expired JWT token
-          localStorage.removeItem('auth_token');
-        }
+        await loadRemoteState(savedToken);
       } catch (err) {
         console.error('Core JWT boot check crashed:', err);
+        clearAuthToken();
       } finally {
         setIsAuthLoading(false);
       }
@@ -203,42 +211,38 @@ export default function App() {
     verifyToken();
   }, []);
 
-  // Hydrate states from offline LocalStorage simulated schema
-  useEffect(() => {
-    if (currentUser) {
-      setAllUsers(FamilyLocalStorage.getUsers());
-      setExpenses(FamilyLocalStorage.getExpenses());
-      setAllowances(FamilyLocalStorage.getAllowances());
-      setComments(FamilyLocalStorage.getComments());
-      setNotifications(FamilyLocalStorage.getNotifications());
-      setFundings(FamilyLocalStorage.getFundings());
-    }
-  }, [currentUser]);
-
-  // Sync to database
-  useEffect(() => {
-    if (currentUser && allUsers.length > 0) {
-      FamilyLocalStorage.saveUsers(allUsers);
-      FamilyLocalStorage.saveExpenses(expenses);
-      FamilyLocalStorage.saveAllowances(allowances);
-      FamilyLocalStorage.saveComments(comments);
-      FamilyLocalStorage.saveNotifications(notifications);
-      FamilyLocalStorage.saveFundings(fundings);
-    }
-  }, [allUsers, expenses, allowances, comments, notifications, fundings, currentUser]);
-
   // Handle Login success
-  const handleLoginSuccess = (token: string, user: FamilyUser) => {
-    localStorage.setItem('auth_token', token);
+  const handleLoginSuccess = async (token: string, user: FamilyUser) => {
+    storeAuthToken(token);
     setAuthToken(token);
     setCurrentUser(user);
+
+    try {
+      await loadRemoteState(token);
+    } catch (err) {
+      console.error('Failed to load remote data after login:', err);
+    }
   };
 
   // Sign out route
   const handleSignOut = () => {
-    localStorage.removeItem('auth_token');
+    clearAuthToken();
     setAuthToken(null);
     setCurrentUser(null);
+    setAllUsers([]);
+    setExpenses([]);
+    setAllowances([]);
+    setComments([]);
+    setNotifications([]);
+    setFundings([]);
+  };
+
+  const refreshRemoteData = async () => {
+    if (!authToken) {
+      return;
+    }
+
+    await loadRemoteState(authToken);
   };
 
   // Active Month allowance filtered by selectedMonth
@@ -310,7 +314,7 @@ export default function App() {
   };
 
   // Action: Add Expense manually
-  const handleAddExpense = (e: React.FormEvent) => {
+  const handleAddExpense = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser || currentUser.role === 'user') return;
     if (!expAmount || !expDesc || !expDate) return;
@@ -318,7 +322,7 @@ export default function App() {
     const amountNum = Number(expAmount);
     if (isNaN(amountNum) || amountNum <= 0) return;
 
-    handleCalendarAddExpense(
+    await handleCalendarAddExpense(
       expDesc.trim(),
       amountNum,
       expCat,
@@ -335,7 +339,7 @@ export default function App() {
   };
 
   // Reusable calendar expense additions
-  const handleCalendarAddExpense = (
+  const handleCalendarAddExpense = async (
     desc: string,
     amount: number,
     category: string,
@@ -345,132 +349,88 @@ export default function App() {
   ) => {
     if (!currentUser || currentUser.role === 'user') return;
     const resolvedName = customCreatedByName || currentUser.displayName;
-    const matchedUser = allUsers.find((u) => u.displayName === resolvedName);
-    const resolvedUid = matchedUser ? matchedUser.uid : currentUser.uid;
+    await apiRequest<Expense>('/api/expenses', {
+      method: 'POST',
+      token: authToken,
+      body: JSON.stringify({
+        amount,
+        description: desc,
+        productName,
+        category,
+        date,
+        createdByName: resolvedName,
+      }),
+    });
 
-    const newExp: Expense = {
-      id: 'exp_' + Date.now(),
-      amount,
-      description: desc,
-      productName,
-      category,
-      date,
-      createdAt: new Date().toISOString(),
-      createdBy: resolvedUid,
-      createdByName: resolvedName,
-    };
-
-    setExpenses((prev) => [newExp, ...prev]);
-
-    // Push alert triggers
-    if (amount > 3000) {
-      const alertNot: Notification = {
-        id: 'not_' + Date.now(),
-        text: `⚠️ High Spending Alert! Spent ${amount.toLocaleString()} Birr on "${productName ? `${productName} (${desc})` : desc}" on ${date} (Logged: ${resolvedName}).`,
-        recipientRole: 'all',
-        readBy: [],
-        createdAt: new Date().toISOString(),
-      };
-      setNotifications((prev) => [alertNot, ...prev]);
-    }
+    await refreshRemoteData();
   };
 
   // Funding inputs handlers (add money triggers) "attached payment receipt screenshot"
-  const handleCalendarAddFunding = (amount: number, source: string, notes: string, screenshot: string | undefined, date: string) => {
+  const handleCalendarAddFunding = async (amount: number, source: string, notes: string, screenshot: string | undefined, date: string) => {
     if (!currentUser) return;
-    const newFund: Funding = {
-      id: 'fund_' + Date.now(),
-      amount,
-      source,
-      date,
-      notes,
-      screenshot,
-      createdAt: new Date().toISOString(),
-      createdBy: currentUser.uid,
-      createdByName: currentUser.displayName
-    };
 
-    setFundings((prev) => [newFund, ...prev]);
+    await apiRequest<Funding>('/api/fundings', {
+      method: 'POST',
+      token: authToken,
+      body: JSON.stringify({
+        amount,
+        source,
+        notes,
+        screenshot,
+        date,
+      }),
+    });
 
-    // Notify sister Alem of the top-off
-    const notif: Notification = {
-      id: 'not_' + Date.now(),
-      text: `💸 Money Added: ${currentUser.displayName} logged ${amount.toLocaleString()} Birr topoff for ${date} (Ref: ${source}).`,
-      recipientRole: 'all',
-      readBy: [],
-      createdAt: new Date().toISOString()
-    };
-    setNotifications((prev) => [notif, ...prev]);
+    await refreshRemoteData();
   };
 
   // Day specific discussion commenting
-  const handleCalendarAddComment = (text: string, type: 'comment' | 'request' | 'contribution', date: string) => {
+  const handleCalendarAddComment = async (text: string, type: 'comment' | 'request' | 'contribution', date: string) => {
     if (!currentUser) return;
-    const newCom: Comment = {
-      id: 'com_day_' + Date.now(),
-      type,
-      text,
-      date, // Map onto calendar date
-      authorName: currentUser.displayName,
-      createdBy: currentUser.uid,
-      createdAt: new Date().toISOString()
-    };
 
-    setComments((prev) => [newCom, ...prev]);
+    await apiRequest<Comment>('/api/comments', {
+      method: 'POST',
+      token: authToken,
+      body: JSON.stringify({
+        type,
+        text,
+        date,
+      }),
+    });
 
-    // Notify family
-    const alertNot: Notification = {
-      id: 'not_' + Date.now(),
-      text: `💬 Pinned Message at ${date} by ${currentUser.displayName}: "${text.length > 40 ? text.substring(0, 40) + '...' : text}"`,
-      recipientRole: 'all',
-      readBy: [],
-      createdAt: new Date().toISOString()
-    };
-    setNotifications((prev) => [alertNot, ...prev]);
+    await refreshRemoteData();
   };
 
   // Action: Delete spending entry (Sister exclusive)
-  const handleDeleteExpense = (id: string) => {
+  const handleDeleteExpense = async (id: string) => {
     if (!currentUser || currentUser.role === 'user') return;
-    setExpenses((prev) => prev.filter((item) => item.id !== id));
+
+    await apiRequest<{ success: boolean }>(`/api/expenses/${id}`, {
+      method: 'DELETE',
+      token: authToken,
+    });
+
+    await refreshRemoteData();
   };
 
   // Action: Set Allowance (Provider refills monthly envelope check)
-  const handleSetAllowance = (e: React.FormEvent) => {
+  const handleSetAllowance = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser) return;
     const amountVal = Number(allowAmount);
     if (isNaN(amountVal) || amountVal <= 0) return;
 
-    const updatedAllowances = [...allowances];
-    const existingIdx = updatedAllowances.findIndex((al) => al.month === selectedMonth);
+    await apiRequest<Allowance>('/api/allowances', {
+      method: 'POST',
+      token: authToken,
+      body: JSON.stringify({
+        amount: amountVal,
+        month: selectedMonth,
+        notes: allowNotes.trim() || `Updated House envelope budget for ${selectedMonth}.`,
+      }),
+    });
 
-    const newAllowance: Allowance = {
-      id: existingIdx !== -1 ? updatedAllowances[existingIdx].id : 'allowance_' + Date.now(),
-      amount: amountVal,
-      month: selectedMonth,
-      notes: allowNotes.trim() || `Updated House envelope budget for ${selectedMonth}.`,
-      createdAt: new Date().toISOString(),
-      createdBy: currentUser.uid,
-    };
-
-    if (existingIdx !== -1) {
-      updatedAllowances[existingIdx] = newAllowance;
-    } else {
-      updatedAllowances.push(newAllowance);
-    }
-
-    setAllowances(updatedAllowances);
-
-    // Push reminder notifications
-    const notif: Notification = {
-      id: 'not_' + Date.now(),
-      text: `⚙️ Base Monthly House Allowance for ${selectedMonth} was set to: ${amountVal.toLocaleString()} Birr by Father ${currentUser.displayName}.`,
-      recipientRole: 'sister',
-      readBy: [],
-      createdAt: new Date().toISOString(),
-    };
-    setNotifications((prev) => [notif, ...prev]);
+    await refreshRemoteData();
 
     setAllowAmount('');
     setAllowNotes('');
@@ -478,38 +438,39 @@ export default function App() {
   };
 
   // General discussion comments handler (Full dashboard board)
-  const handleAddGeneralComment = (type: 'comment' | 'request' | 'contribution', text: string) => {
+  const handleAddGeneralComment = async (type: 'comment' | 'request' | 'contribution', text: string) => {
     if (!currentUser) return;
-    const newComment: Comment = {
-      id: 'com_gen_' + Date.now(),
-      type,
-      text,
-      authorName: currentUser.displayName,
-      createdBy: currentUser.uid,
-      createdAt: new Date().toISOString(),
-    };
 
-    setComments((prev) => [newComment, ...prev]);
+    await apiRequest<Comment>('/api/comments', {
+      method: 'POST',
+      token: authToken,
+      body: JSON.stringify({
+        type,
+        text,
+      }),
+    });
+
+    await refreshRemoteData();
   };
 
-  const handleMarkNotificationRead = (id: string) => {
+  const handleMarkNotificationRead = async (id: string) => {
     if (!currentUser) return;
-    setNotifications((prev) =>
-      prev.map((n) => {
-        if (n.id === id) {
-          const reads = [...n.readBy];
-          if (!reads.includes(currentUser.uid)) {
-            reads.push(currentUser.uid);
-          }
-          return { ...n, readBy: reads };
-        }
-        return n;
-      })
-    );
+
+    await apiRequest<Notification>(`/api/notifications/${id}/read`, {
+      method: 'PATCH',
+      token: authToken,
+    });
+
+    await refreshRemoteData();
   };
 
-  const handleClearNotifications = () => {
-    setNotifications([]);
+  const handleClearNotifications = async () => {
+    await apiRequest<{ success: boolean }>('/api/notifications', {
+      method: 'DELETE',
+      token: authToken,
+    });
+
+    await refreshRemoteData();
   };
 
   // Gatekeeping loading screen
